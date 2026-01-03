@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TARGET TRACKER | CLEAR VIEW</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+    <style>
+        :root {
+            --bg: #050505;
+            --radar-color: #00ff33; 
+            --radar-dim: rgba(0, 255, 51, 0.2);
+            --font-main: 'Share Tech Mono', monospace;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; cursor: crosshair; user-select: none; }
+
+        body {
+            background-color: var(--bg);
+            color: var(--radar-color);
+            font-family: var(--font-main);
+            height: 100vh; width: 100vw;
+            overflow: hidden;
+        }
+
+        /* --- 1. MAP LAYER (JELAS TANPA FILTER GELAP) --- */
+        #map {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 0;
+            background: #000;
+            /* Peta dibiarkan natural agar terlihat jelas */
+        }
+        
+        /* Hapus tombol zoom bawaan */
+        .leaflet-control-zoom, .leaflet-control-attribution { display: none !important; }
+
+        /* --- 2. OVERLAYS (Grid Halus Saja) --- */
+        .grid-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-image: 
+                linear-gradient(rgba(0, 255, 51, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 51, 0.1) 1px, transparent 1px);
+            background-size: 100px 100px;
+            pointer-events: none; z-index: 10;
+            opacity: 0.3; /* Transparan biar ga ganggu peta */
+        }
+
+        .vignette {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 60%, black 100%);
+            pointer-events: none; z-index: 11;
+        }
+
+        /* --- 3. HUD UI --- */
+        .hud {
+            position: relative; z-index: 20; width: 100%; height: 100%;
+            display: grid;
+            grid-template-columns: 350px 1fr 400px; /* Panel Kiri - Peta Tengah - Panel Kanan */
+            grid-template-rows: 60px 1fr 100px;
+            padding: 20px; gap: 20px;
+            pointer-events: none;
+        }
+
+        /* Kotak Panel */
+        .panel {
+            background: rgba(0, 10, 0, 0.85);
+            border: 1px solid var(--radar-color);
+            padding: 15px; display: flex; flex-direction: column;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        /* HEADER */
+        .top-bar {
+            grid-column: 1 / 4; display: flex; justify-content: space-between; align-items: center;
+            background: rgba(0, 20, 0, 0.9); border-bottom: 2px solid var(--radar-color);
+            padding: 0 30px; pointer-events: auto;
+        }
+        .title { font-size: 2rem; font-weight: bold; letter-spacing: 5px; text-shadow: 0 0 10px var(--radar-color); }
+        .status-box { border: 1px solid var(--radar-color); padding: 5px 15px; animation: blink 1s infinite; }
+
+        /* LEFT: LOGS */
+        .logs { grid-row: 2 / 3; grid-column: 1 / 2; overflow: hidden; font-size: 0.8rem; }
+        .log-content { display: flex; flex-direction: column-reverse; height: 100%; }
+        .log-line { margin-bottom: 5px; border-bottom: 1px dashed #333; color: #cfc; }
+
+        /* RIGHT: TARGET VISUAL */
+        .intel { grid-row: 2 / 3; grid-column: 3 / 4; }
+        .photo-frame {
+            width: 100%; height: 250px; border: 1px solid var(--radar-color);
+            margin-top: 10px; position: relative; overflow: hidden; background: #000;
+        }
+        .target-img {
+            width: 100%; height: 100%; object-fit: cover;
+            /* Filter Hijau Night Vision */
+            filter: grayscale(100%) sepia(100%) hue-rotate(90deg) saturate(200%) contrast(1.2);
+            transition: opacity 0.5s;
+        }
+        .rec-label {
+            position: absolute; top: 10px; left: 10px; background: red; color: white;
+            padding: 2px 5px; font-size: 0.8rem; font-weight: bold; animation: blink 1s infinite;
+        }
+
+        /* BOTTOM */
+        .footer {
+            grid-column: 1 / 4; grid-row: 3 / 4;
+            display: flex; justify-content: center; align-items: center; gap: 50px;
+            background: rgba(0,0,0,0.8); border-top: 1px solid var(--radar-color);
+        }
+        .stat-item { text-align: center; }
+        .stat-val { font-size: 1.8rem; font-weight: bold; }
+
+        /* ANIMATIONS */
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* BUTTON */
+        #boot {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 9999;
+            display: flex; justify-content: center; align-items: center; flex-direction: column;
+        }
+        .btn-start {
+            background: transparent; border: 2px solid var(--radar-color); color: var(--radar-color);
+            padding: 20px 60px; font-family: var(--font-main); font-size: 1.5rem; letter-spacing: 3px;
+            cursor: pointer; box-shadow: 0 0 20px var(--radar-color); pointer-events: auto;
+        }
+        .btn-start:hover { background: var(--radar-color); color: black; }
+
+        /* Marker Styles */
+        .target-icon {
+            border: 2px solid var(--radar-color); background: rgba(0, 255, 51, 0.3);
+            border-radius: 50%; width: 20px; height: 20px;
+            animation: pulseMarker 1s infinite;
+        }
+        @keyframes pulseMarker { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0,255,51, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(0,255,51, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0,255,51, 0); } }
+
+    </style>
+</head>
+<body>
+
+    <div class="grid-overlay"></div>
+    <div class="vignette"></div>
+
+    <div id="boot">
+        <button class="btn-start" onclick="initSystem()">START TRACKING</button>
+        <p style="margin-top:20px; color:#555;">SECURE LINE ESTABLISHED</p>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="hud" id="hud" style="display: none;">
+        
+        <div class="top-bar">
+            <div class="title">EYE_IN_THE_SKY</div>
+            <div style="font-size: 1.2rem;">TARGET: <span id="target-name" style="color:white;">SEARCHING...</span></div>
+            <div class="status-box">LIVE FEED</div>
+        </div>
+
+        <div class="panel logs">
+            <div style="border-bottom:1px solid #0f0; margin-bottom:5px; font-weight:bold;">INTERCEPT LOGS</div>
+            <div class="log-content" id="log-feed"></div>
+        </div>
+
+        <div class="panel intel">
+            <div style="border-bottom:1px solid #0f0; margin-bottom:5px; font-weight:bold;">VISUAL CONFIRMATION</div>
+            <div class="photo-frame">
+                <div class="rec-label">REC</div>
+                <img id="cam-feed" class="target-img" src="https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=600&auto=format&fit=crop" alt="NO SIGNAL">
+            </div>
+            <div style="margin-top:15px; line-height: 1.5;">
+                LATITUDE: <span id="lat-val" style="color:white">--.----</span><br>
+                LONGITUDE: <span id="lon-val" style="color:white">--.----</span><br>
+                CONFIDENCE: <span style="color:white">99.9%</span>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="stat-item">
+                <div>DATA PACKETS</div>
+                <div class="stat-val" id="data-count">0</div>
+            </div>
+            <div class="stat-item">
+                <div>SATELLITES</div>
+                <div class="stat-val">12 / 12</div>
+            </div>
+            <div class="stat-item">
+                <div>SIGNAL STRENGTH</div>
+                <div class="stat-val" style="color:white">STRONG</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // --- DATA TARGET ---
+        // Lokasi Nyata + Foto Nyata (Unsplash)
+        const targets = [
+            { name: "SHIBUYA, TOKYO", lat: 35.6591, lon: 139.7006, img: "https://images.unsplash.com/photo-1542931287-023b922fa89b?auto=format&fit=crop&w=600&q=80" },
+            { name: "TIMES SQUARE, USA", lat: 40.7580, lon: -73.9855, img: "https://images.unsplash.com/photo-1534270804882-6b5048b1c1fc?auto=format&fit=crop&w=600&q=80" },
+            { name: "MOSCOW, RUSSIA", lat: 55.7539, lon: 37.6208, img: "https://images.unsplash.com/photo-1565426873118-a17ed65d7429?auto=format&fit=crop&w=600&q=80" },
+            { name: "BERLIN, GERMANY", lat: 52.5200, lon: 13.4050, img: "https://images.unsplash.com/photo-1560969184-10fe8719e047?auto=format&fit=crop&w=600&q=80" },
+            { name: "MONAS, INDONESIA", lat: -6.1754, lon: 106.8272, img: "https://images.unsplash.com/photo-1555899434-94d1368d7dd6?auto=format&fit=crop&w=600&q=80" },
+            { name: "LONDON, UK", lat: 51.5074, lon: -0.1278, img: "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?q=80&w=600&auto=format&fit=crop" },
+            { name: "DUBAI, UAE", lat: 25.1972, lon: 55.2744, img: "https://images.unsplash.com/photo-1512453979798-5ea932a23518?q=80&w=600&auto=format&fit=crop" }
+        ];
+
+        let map;
+        
+        // --- AUDIO (Simple Beep) ---
+        const AudioFX = {
+            ctx: null,
+            init() { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); },
+            beep() {
+                if(!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain); gain.connect(this.ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+                gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+                osc.start(); osc.stop(this.ctx.currentTime + 0.1);
+            }
+        };
+
+        function initSystem() {
+            document.getElementById('boot').style.display = 'none';
+            document.getElementById('hud').style.display = 'grid';
+            try { AudioFX.init(); } catch(e){}
+
+            // 1. MAP SETUP (Esri World Imagery - Satelit Jelas)
+            map = L.map('map', { 
+                zoomControl: false, attributionControl: false, 
+                zoomAnimation: true
+            }).setView([20, 0], 3);
+
+            // Layer Satelit
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 17,
+                attribution: 'Tiles &copy; Esri'
+            }).addTo(map);
+
+            // Layer Label (Nama Jalan/Kota) agar lebih informatif
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 17
+            }).addTo(map);
+
+            // Start Logic
+            trackTarget();
+            setInterval(trackTarget, 6000); // Ganti target tiap 6 detik
+            setInterval(genLogs, 200); // Logs cepat
+            setInterval(() => {
+                document.getElementById('data-count').innerText = Math.floor(Math.random() * 999999);
+            }, 100);
+        }
+
+        function trackTarget() {
+            const t = targets[Math.floor(Math.random() * targets.length)];
+            
+            AudioFX.beep();
+
+            // Pindah Peta (FlyTo)
+            map.flyTo([t.lat, t.lon], 13, {
+                animate: true, duration: 4
+            });
+
+            // Update Text Data
+            document.getElementById('target-name').innerText = t.name;
+            document.getElementById('lat-val').innerText = t.lat.toFixed(6);
+            document.getElementById('lon-val').innerText = t.lon.toFixed(6);
+
+            // Update Photo
+            setTimeout(() => {
+                const img = document.getElementById('cam-feed');
+                img.style.opacity = 0;
+                setTimeout(() => {
+                    img.src = t.img;
+                    img.style.opacity = 0.9;
+                }, 300);
+            }, 3000); // Delay foto sampai peta mendekat
+        }
+
+        function genLogs() {
+            const logs = ["TRACING IP...", "PACKET SNIFFING", "DECRYPTING SSL", "FACE MATCH FOUND", "UPLINK STABLE", "ACCESSING CCTV"];
+            const txt = `> ${logs[Math.floor(Math.random()*logs.length)]} [${Math.floor(Math.random()*999)}]`;
+            const el = document.createElement('div');
+            el.className = 'log-line';
+            el.innerText = txt;
+            const feed = document.getElementById('log-feed');
+            feed.prepend(el);
+            if(feed.children.length > 20) feed.lastChild.remove();
+        }
+
+    </script>
+</body>
+</html>
